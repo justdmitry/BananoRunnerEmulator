@@ -10,6 +10,8 @@
 
     public class Emulator
     {
+        private static readonly Random rand = new Random();
+
         private readonly ILogger logger;
 
         private readonly Uri baseUri = new Uri("http://bbdevelopment.website:27000");
@@ -159,6 +161,19 @@
                                 bananoCollected++;
                                 bananoMissed += 2;
                                 break;
+                        }
+                    }
+
+                    var rnd = rand.Next(0, 100);
+                    if (rnd < 15)
+                    {
+                        bananoCollected--;
+                        bananoMissed++;
+
+                        if (rnd < 5)
+                        {
+                            bananoCollected--;
+                            bananoMissed++;
                         }
                     }
 
