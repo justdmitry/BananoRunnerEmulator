@@ -40,10 +40,19 @@
             logger.LogInformation("Starting...");
 
             await GameSettings();
-            await AmIValid();
+
             while (true)
             {
-                await GamePacket();
+                await AmIValid();
+
+                var count = rand.Next(5, 27);
+                for (var i = 0; i < count; i++)
+                {
+                    await GamePacket();
+                }
+
+                logger.LogInformation("Restarting...");
+                await Task.Delay(700);
             }
         }
 
