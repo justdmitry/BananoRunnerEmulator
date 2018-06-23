@@ -10,7 +10,7 @@
 
     public class Emulator
     {
-        private static readonly Random rand = new Random();
+        private readonly Random rand = new Random();
 
         private readonly ILogger logger;
 
@@ -24,35 +24,54 @@
 
         private int bananoCollectedTotal = 0;
 
+        private int exceptionsCount = 0;
+
         public Emulator(ILogger<Emulator> logger)
         {
             this.logger = logger;
 
             this.httpClient = new HttpClient() { BaseAddress = baseUri };
-            this.httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UnityPlayer/2018.1.0b13 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)");
+            this.httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UnityPlayer/2018.1.5f1 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)");
             this.httpClient.DefaultRequestHeaders.Accept.TryParseAdd("*/*");
             this.httpClient.DefaultRequestHeaders.AcceptEncoding.TryParseAdd("identity");
-            this.httpClient.DefaultRequestHeaders.Add("X-Unity-Version", "2018.1.0b13");
+            this.httpClient.DefaultRequestHeaders.Add("X-Unity-Version", "2018.1.5f1");
         }
 
-        public async Task Run()
+        public async Task RunAsync(string wallet)
         {
-            logger.LogInformation("Starting...");
+            logger.LogInformation($"Starting for wallet '{wallet}'");
 
+            while (true)
+            {
+                try
+                {
+                    await PlayAsync(wallet);
+                    break;
+                }
+                catch (Exception ex) when (ex is HttpRequestException)
+                {
+                    exceptionsCount++;
+                    if (exceptionsCount > 10)
+                    {
+                        throw;
+                    }
+
+                    var delay = exceptionsCount > 5 ? exceptionsCount * 5 : exceptionsCount;
+                    logger.LogWarning($"Exception #{exceptionsCount}, delay {delay} sec: {ex.Message}");
+                    await Task.Delay(TimeSpan.FromSeconds(delay));
+                }
+            }
+
+            logger.LogInformation("Completed.");
+        }
+
+        public async Task PlayAsync(string wallet)
+        {
             await GameSettings();
 
             while (true)
             {
-                await AmIValid();
-
-                var count = rand.Next(5, 27);
-                for (var i = 0; i < count; i++)
-                {
-                    await GamePacket();
-                }
-
-                logger.LogInformation("Restarting...");
-                await Task.Delay(700);
+                await GamePacket(wallet);
             }
         }
 
@@ -67,55 +86,18 @@
                     resp.EnsureSuccessStatusCode();
                     var respText = await resp.Content.ReadAsStringAsync();
                     logger.LogDebug(respText);
-                    Console.WriteLine("Press ENTER to continue...");
-                    Console.ReadLine();
                 }
             }
         }
 
-        public async Task AmIValid()
+        public async Task GamePacket(string wallet)
         {
-            logger.LogInformation("Sending /amivalid...");
+            logger.LogDebug($"Sending /gamepacket (collected {bananoCollected}, missed {bananoMissed})...");
 
             var prms = new Dictionary<string, string>
             {
-                ["wallet"] = Program.Wallet,
-                ["version"] = "3.0"
-            };
-
-            using (var req = new HttpRequestMessage(HttpMethod.Post, "/amivalid"))
-            {
-                req.Content = new FormUrlEncodedContent(prms);
-
-                using (var resp = await httpClient.SendAsync(req))
-                {
-                    resp.EnsureSuccessStatusCode();
-                    var respText = await resp.Content.ReadAsStringAsync();
-                    logger.LogDebug(respText);
-
-                    var respMsg = JsonConvert.DeserializeObject<ServerResponse>(respText);
-
-                    if (respMsg.Code != 1)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine(respMsg.Message);
-                        Console.WriteLine($"http://bbdevelopment.website:27000/robochecker&wallet={Program.Wallet}");
-                        Console.ResetColor();
-                        Console.WriteLine("Press ENTER to continue...");
-                        Console.ReadLine();
-                    }
-                }
-            }
-        }
-
-        public async Task GamePacket()
-        {
-            logger.LogInformation($"Sending /gamepacket (collected {bananoCollected}, missed {bananoMissed})...");
-
-            var prms = new Dictionary<string, string>
-            {
-                ["wallet"] = Program.Wallet,
-                ["version"] = "3.0",
+                ["wallet"] = wallet,
+                ["version"] = "4.0",
                 ["collected"] = bananoCollected.ToString(),
                 ["missed"] = bananoMissed.ToString(),
             };
@@ -136,17 +118,18 @@
 
                     if (respMsg.Code != 1)
                     {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine(respMsg.Message);
-                        Console.WriteLine($"http://bbdevelopment.website:27000/robochecker&wallet={Program.Wallet}");
-                        Console.ResetColor();
-                        Console.WriteLine("Press ENTER to continue...");
+                        logger.LogError("Response: " + respMsg.Message);
+                        logger.LogError("If you need validate recaptcha, here is link:");
+                        logger.LogError($"  http://bbdevelopment.website:27000/robochecker&wallet={wallet}");
+                        logger.LogError("Press ENTER to continue...");
                         Console.ReadLine();
+                        logger.LogDebug("ENTER pressed");
+                        return;
                     }
 
                     bananoCollectedTotal += bananoCollected;
 
-                    var validBananoes = new[] { "2", "3", "4", "5" };
+                    var validBananoes = new[] { "3", "4", "10" };
                     var data = respMsg.Block.Text.Split("|");
 
                     var arr = data.Take(respMsg.Block.Length).Select(x => x.Split(",")).ToList();
@@ -196,13 +179,12 @@
             {
                 await Task.Delay(1000);
                 timeToWait--;
-                Console.ForegroundColor = ConsoleColor.DarkYellow;
-                Console.Write($"Waiting for {timeToWait}  ");
+                Console.Write($"Waiting for {timeToWait}...  ");
                 Console.CursorLeft = 0;
             }
 
-            Console.ResetColor();
-            Console.WriteLine("                           "); // Overwrite "Waiting for..."
+            Console.WriteLine("                              "); // Overwrite "Waiting for..."
+            Console.CursorLeft = 0;
         }
 
         private class ServerResponse
