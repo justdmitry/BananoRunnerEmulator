@@ -2,6 +2,7 @@
 {
     using System;
     using System.Collections.Generic;
+    using System.IO;
     using System.Linq;
     using System.Net.Http;
     using System.Threading.Tasks;
@@ -39,7 +40,7 @@
             this.httpClient.DefaultRequestHeaders.Add("X-Unity-Version", "2018.2.0b11");
         }
 
-        public int BananoCollectedTotal { get; set; }
+        public int BananoCollectedTotal { get; private set; }
 
         public static int ComputeBananoCollected(List<int[]> data)
         {
@@ -62,12 +63,25 @@
 
         public async Task RunAsync(EmulatorOptions options)
         {
+            Directory.CreateDirectory("saves");
+            var saveFile = $"saves/{options.Wallet}.json";
+            if (File.Exists(saveFile))
+            {
+                var text = await File.ReadAllTextAsync(saveFile);
+                BananoCollectedTotal = int.Parse(text);
+                logger.LogInformation("Savefile loaded: TotalBananos = " + BananoCollectedTotal);
+            }
+
             while (true)
             {
                 try
                 {
-                    await PlayAsync(options);
+                    await PlayAsync(options, saveFile);
                     break;
+                }
+                catch (RestartNeededException ex)
+                {
+                    logger.LogWarning($"RestartNeededException: {ex.Message}");
                 }
                 catch (Exception ex) when (ex is HttpRequestException)
                 {
@@ -86,7 +100,7 @@
             logger.LogInformation("Completed.");
         }
 
-        public async Task PlayAsync(EmulatorOptions options)
+        public async Task PlayAsync(EmulatorOptions options, string saveFile)
         {
             logger.LogInformation("PlayAsync() started");
 
@@ -99,6 +113,7 @@
             while (true)
             {
                 await GamePacket(options);
+                File.WriteAllText(saveFile, BananoCollectedTotal.ToString());
                 roundsCount++;
             }
         }
@@ -116,6 +131,8 @@
                     logger.LogDebug(respText);
                 }
             }
+
+            await Task.Delay(3000); // 3 sec for mouse clicking and loading
         }
 
         public async Task GamePacket(EmulatorOptions options)
@@ -154,7 +171,7 @@
                         logger.LogError("Press ENTER to continue...");
                         Console.ReadLine();
                         logger.LogDebug("ENTER pressed");
-                        throw new ApplicationException("Need restart round");
+                        throw new RestartNeededException("Recaptcha :(");
                     }
 
                     exceptionsCount = 0;
@@ -187,21 +204,21 @@
                         var delay = rand.Next(5, 10);
                         logger.LogWarning("Fail (newbie), delay " + delay);
                         await Task.Delay(delay * 1000);
-                        throw new ApplicationException("Fail (newbie)");
+                        throw new RestartNeededException("Fail (newbie)");
                     }
                     else if (BananoCollectedTotal < 100 && rndFail < 50)
                     {
                         var delay = rand.Next(5, 10);
                         logger.LogWarning("Fail (amateur), delay " + delay);
                         await Task.Delay(delay * 1000);
-                        throw new ApplicationException("Fail (amateur)");
+                        throw new RestartNeededException("Fail (amateur)");
                     }
                     else if (BananoCollectedTotal < 1000 && rndFail < 20)
                     {
                         var delay = rand.Next(5, 10);
                         logger.LogWarning("Fail (advanced), delay " + delay);
                         await Task.Delay(delay * 1000);
-                        throw new ApplicationException("Fail (advanced)");
+                        throw new RestartNeededException("Fail (advanced)");
                     }
 
                     timeToWait = respMsg.Block.Time + (roundsCount == 0 ? 0 : respMsg.Block.Delay - 1);
