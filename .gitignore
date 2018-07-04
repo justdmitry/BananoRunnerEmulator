@@ -2,4 +2,5 @@
 *.user
 bin
 obj
-log
+logs
+saves

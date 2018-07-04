@@ -10,6 +10,8 @@
 
     public class Emulator
     {
+        private static readonly int[] ValidBananoes = new[] { 3, 4, 10 };
+
         private readonly Random rand = new Random();
 
         private readonly ILogger logger;
@@ -18,34 +20,53 @@
 
         private readonly HttpClient httpClient;
 
-        private byte bananoCollected = 0;
+        private int bananoCollected = 0;
 
-        private byte bananoMissed = 0;
-
-        private int bananoCollectedTotal = 0;
+        private int bananoMissed = 0;
 
         private int exceptionsCount = 0;
+
+        private int roundsCount = 0;
 
         public Emulator(ILogger<Emulator> logger)
         {
             this.logger = logger;
 
             this.httpClient = new HttpClient() { BaseAddress = baseUri };
-            this.httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UnityPlayer/2018.1.5f1 (UnityWebRequest/1.0, libcurl/7.51.0-DEV)");
+            this.httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("UnityPlayer/2018.2.0b11 (UnityWebRequest/1.0, libcurl/7.52.0-DEV)");
             this.httpClient.DefaultRequestHeaders.Accept.TryParseAdd("*/*");
             this.httpClient.DefaultRequestHeaders.AcceptEncoding.TryParseAdd("identity");
-            this.httpClient.DefaultRequestHeaders.Add("X-Unity-Version", "2018.1.5f1");
+            this.httpClient.DefaultRequestHeaders.Add("X-Unity-Version", "2018.2.0b11");
         }
 
-        public async Task RunAsync(string wallet)
-        {
-            logger.LogInformation($"Starting for wallet '{wallet}'");
+        public int BananoCollectedTotal { get; set; }
 
+        public static int ComputeBananoCollected(List<int[]> data)
+        {
+            var bonusSums = new[] { 12, 13, 14 };
+
+            var visible = data.Count(x => x.Any(y => ValidBananoes.Contains(y)));
+
+            var bonus = data.Any(x => bonusSums.Contains(x.Sum()));
+
+            return visible + (bonus ? 1 : 0);
+        }
+
+        public static int ComputeBananoMissed(List<int[]> data)
+        {
+            return data
+                .Select(x => x.Count(y => ValidBananoes.Contains(y)))
+                .Select(x => x > 1 ? x - 1 : 0)
+                .Sum();
+        }
+
+        public async Task RunAsync(EmulatorOptions options)
+        {
             while (true)
             {
                 try
                 {
-                    await PlayAsync(wallet);
+                    await PlayAsync(options);
                     break;
                 }
                 catch (Exception ex) when (ex is HttpRequestException)
@@ -65,13 +86,20 @@
             logger.LogInformation("Completed.");
         }
 
-        public async Task PlayAsync(string wallet)
+        public async Task PlayAsync(EmulatorOptions options)
         {
+            logger.LogInformation("PlayAsync() started");
+
             await GameSettings();
+
+            roundsCount = 0;
+            bananoCollected = 0;
+            bananoMissed = 0;
 
             while (true)
             {
-                await GamePacket(wallet);
+                await GamePacket(options);
+                roundsCount++;
             }
         }
 
@@ -90,16 +118,18 @@
             }
         }
 
-        public async Task GamePacket(string wallet)
+        public async Task GamePacket(EmulatorOptions options)
         {
             logger.LogDebug($"Sending /gamepacket (collected {bananoCollected}, missed {bananoMissed})...");
 
             var prms = new Dictionary<string, string>
             {
-                ["wallet"] = wallet,
-                ["version"] = "4.0",
+                ["wallet"] = options.Wallet,
+                ["version"] = "4.2",
                 ["collected"] = bananoCollected.ToString(),
                 ["missed"] = bananoMissed.ToString(),
+                ["seed"] = options.Seed,
+                ["os"] = options.OS,
             };
 
             var timeToWait = 0;
@@ -120,58 +150,63 @@
                     {
                         logger.LogError("Response: " + respMsg.Message);
                         logger.LogError("If you need validate recaptcha, here is link:");
-                        logger.LogError($"  http://bbdevelopment.website:27000/robochecker&wallet={wallet}");
+                        logger.LogError($"  http://bbdevelopment.website:27000/robochecker&wallet={options.Wallet}");
                         logger.LogError("Press ENTER to continue...");
                         Console.ReadLine();
                         logger.LogDebug("ENTER pressed");
-                        return;
+                        throw new ApplicationException("Need restart round");
                     }
 
-                    bananoCollectedTotal += bananoCollected;
+                    exceptionsCount = 0;
+                    BananoCollectedTotal += bananoCollected;
 
-                    var validBananoes = new[] { "3", "4", "10" };
                     var data = respMsg.Block.Text.Split("|");
+                    var arr = data
+                        .Take(respMsg.Block.Length)
+                        .Select(x => x.Split(",").Select(y => int.Parse(y)).ToArray())
+                        .ToList();
+                    bananoCollected = ComputeBananoCollected(arr);
+                    bananoMissed = ComputeBananoMissed(arr);
 
-                    var arr = data.Take(respMsg.Block.Length).Select(x => x.Split(",")).ToList();
-                    bananoCollected = 0;
-                    bananoMissed = 0;
-                    foreach (var scene in arr)
-                    {
-                        var bananoes = scene.Count(x => validBananoes.Contains(x));
-                        switch (bananoes)
-                        {
-                            case 0:
-                                break;
-                            case 1:
-                                bananoCollected++;
-                                break;
-                            case 2:
-                                bananoCollected++;
-                                bananoMissed++;
-                                break;
-                            case 3:
-                                bananoCollected++;
-                                bananoMissed += 2;
-                                break;
-                        }
-                    }
-
-                    var rnd = rand.Next(0, 100);
-                    if (rnd < 15)
+                    var rndMiss = rand.Next(0, 100);
+                    if (rndMiss < 15)
                     {
                         bananoCollected--;
                         bananoMissed++;
 
-                        if (rnd < 5)
+                        if (rndMiss < 5)
                         {
                             bananoCollected--;
                             bananoMissed++;
                         }
                     }
 
-                    timeToWait = respMsg.Block.Time + respMsg.Block.Delay;
+                    var rndFail = rand.Next(0, 100);
+                    if (BananoCollectedTotal < 30 && rndFail < 75)
+                    {
+                        var delay = rand.Next(5, 10);
+                        logger.LogWarning("Fail (newbie), delay " + delay);
+                        await Task.Delay(delay * 1000);
+                        throw new ApplicationException("Fail (newbie)");
+                    }
+                    else if (BananoCollectedTotal < 100 && rndFail < 50)
+                    {
+                        var delay = rand.Next(5, 10);
+                        logger.LogWarning("Fail (amateur), delay " + delay);
+                        await Task.Delay(delay * 1000);
+                        throw new ApplicationException("Fail (amateur)");
+                    }
+                    else if (BananoCollectedTotal < 1000 && rndFail < 20)
+                    {
+                        var delay = rand.Next(5, 10);
+                        logger.LogWarning("Fail (advanced), delay " + delay);
+                        await Task.Delay(delay * 1000);
+                        throw new ApplicationException("Fail (advanced)");
+                    }
 
-                    logger.LogInformation($"Total collected: {bananoCollectedTotal}. Next to collect: {bananoCollected}, to miss: {bananoMissed}");
+                    timeToWait = respMsg.Block.Time + (roundsCount == 0 ? 0 : respMsg.Block.Delay - 1);
+
+                    logger.LogInformation($"Total collected: {BananoCollectedTotal}. Next to collect: {bananoCollected}, to miss: {bananoMissed}");
                 }
             }
 
