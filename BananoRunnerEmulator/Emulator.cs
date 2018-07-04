@@ -63,8 +63,8 @@
 
         public async Task RunAsync(EmulatorOptions options)
         {
-            Directory.CreateDirectory("saves");
-            var saveFile = $"saves/{options.Wallet}.json";
+            Directory.CreateDirectory("d:/Temp/banano/data");
+            var saveFile = $"d:/Temp/banano/data/{options.Wallet}.json";
             if (File.Exists(saveFile))
             {
                 var text = await File.ReadAllTextAsync(saveFile);

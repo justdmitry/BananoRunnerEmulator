@@ -19,7 +19,7 @@
                .Build();
 
             var options = config.GetSection("EmulatorOptions").Get<EmulatorOptions>();
-            var logFileName = $"logs/log.{options.Wallet.Substring(0, 7)}.txt";
+            var logFileName = $"d:/Temp/banano/data/log.{options.Wallet.Substring(0, 7)}.txt";
 
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Verbose()
